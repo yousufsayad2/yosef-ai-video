@@ -13,6 +13,12 @@ import imageio_ffmpeg
 
 APP_NAME = "Yosef AI Video"
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models"
+def get_secret(name):
+    try:
+        return st.secrets.get(name, "")
+    except Exception:
+        return ""
+
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 
 def call_ai(api_key, prompt, model=DEFAULT_GEMINI_MODEL):
@@ -179,14 +185,14 @@ def concat_videos(video_paths, output):
         pass
 
 api_key = st.text_input(
-    "🔑 OpenRouter API Key",
-    value=get_secret("OPENROUTER_API_KEY"),
+    "🔑 Gemini API Key",
+    value=get_secret("GEMINI_API_KEY"),
     type="password",
 )
 
 model = st.selectbox(
     "🤖 AI Model",
-    ["openrouter/free", "google/gemini-2.5-flash"],
+    ["gemini-2.5-flash"],
 )
 
 idea = st.text_area(
