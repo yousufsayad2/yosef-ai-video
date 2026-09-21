@@ -25,11 +25,10 @@ def call_ai(api_key, prompt, model=DEFAULT_GEMINI_MODEL):
     api_key = api_key.strip().strip('"').strip("'")
     if not api_key:
         raise RuntimeError("مفتاح Gemini غير موجود.")
-    if not api_key.startswith("AIza"):
+    if not (api_key.startswith("AIza") or api_key.startswith("AQ.")):
         raise RuntimeError("مفتاح Gemini غير صحيح أو لم يتم لصقه بالكامل.")
 
     url = f"{GEMINI_URL}/{model}:generateContent"
-    params = {"key": api_key}
     payload = {
         "systemInstruction": {
             "parts": [{"text": "Return only valid JSON. No markdown."}]
@@ -43,7 +42,15 @@ def call_ai(api_key, prompt, model=DEFAULT_GEMINI_MODEL):
         }
     }
 
-    r = requests.post(url, params=params, json=payload, timeout=120)
+    r = requests.post(
+        url,
+        headers={
+            "Content-Type": "application/json",
+            "x-goog-api-key": api_key,
+        },
+        json=payload,
+        timeout=120,
+    )
 
     if not r.ok:
         try:
