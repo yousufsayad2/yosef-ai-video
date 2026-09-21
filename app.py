@@ -91,17 +91,42 @@ def submit_wan(prompt_text, size, watermark_value):
         api_name="/t2v_generation_async"
     )
 
-    if not isinstance(result, (list, tuple)) or len(result) < 1:
-        raise RuntimeError(f"استجابة غير متوقعة: {result}")
+    # Gradio can return component-update dictionaries in the response.
+    # The task id is the string output; do not assume it is result[0].
+    def find_task_id(value):
+        if isinstance(value, str):
+            text = value.strip()
+            if text and not text.startswith(("http://", "https://")):
+                # DashScope task IDs are long alphanumeric/UUID-like strings.
+                if len(text) >= 12:
+                    return text
+            return None
 
-    task_id = result[0]
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                found = find_task_id(item)
+                if found:
+                    return found
+
+        if isinstance(value, dict):
+            # Ignore Gradio component update objects.
+            if value.get("__type__") == "update":
+                return None
+            for item in value.values():
+                found = find_task_id(item)
+                if found:
+                    return found
+
+        return None
+
+    task_id = find_task_id(result)
 
     if not task_id:
         raise RuntimeError(
-            "الـ Space مش قادر يبدأ المهمة حاليًا. جرّب مرة أخرى بعد دقيقة."
+            f"لم أستطع استخراج رقم المهمة من استجابة Wan2.1: {result}"
         )
 
-    return str(task_id)
+    return task_id
 
 def check_wan(task_id):
     client = Client("Wan-AI/Wan2.1")
