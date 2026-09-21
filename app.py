@@ -1,6 +1,5 @@
 
 import os
-import time
 import tempfile
 import subprocess
 from pathlib import Path
@@ -35,45 +34,42 @@ resolution = st.selectbox(
 
 watermark = st.checkbox("إضافة علامة Wan2.1", value=False)
 
-def find_video(value):
-    if value is None:
-        return None
-
-    if isinstance(value, str):
-        if value.startswith(("http://", "https://")) or os.path.exists(value):
-            return value
-        return None
-
-    if isinstance(value, dict):
-        for k in ("video", "url", "path", "file", "value"):
-            if k in value:
-                found = find_video(value[k])
-                if found:
-                    return found
-
-    if isinstance(value, (list, tuple)):
-        for item in value:
-            found = find_video(item)
-            if found:
-                return found
-
-    for attr in ("url", "path", "name"):
-        try:
-            v = getattr(value, attr)
-            if isinstance(v, str) and (
-                v.startswith(("http://", "https://")) or os.path.exists(v)
+def get_video(result):
+    if isinstance(result, str):
+        return result
+    if isinstance(result, (list, tuple)):
+        for x in result:
+            if isinstance(x, str) and (
+                x.startswith("http://") or
+                x.startswith("https://") or
+                os.path.exists(x)
             ):
-                return v
-        except Exception:
-            pass
-
+                return x
+    if isinstance(result, dict):
+        for k in ("video", "url", "path"):
+            x = result.get(k)
+            if isinstance(x, str):
+                return x
     return None
 
-def localize_video(video):
-    if not video:
-        return None
+def generate_video(prompt_text, size, watermark_value):
+    client = Client("Wan-AI/Wan2.1")
 
-    if isinstance(video, str) and video.startswith(("http://", "https://")):
+    # The current official Wan2.1 Space exposes this synchronous
+    # text-to-video endpoint. It returns the generated video URL.
+    result = client.predict(
+        prompt_text,
+        size,
+        watermark_value,
+        -1,
+        api_name="/t2v_generation"
+    )
+
+    video = get_video(result)
+    if not video:
+        raise RuntimeError(f"لم يرجع Wan2.1 رابط فيديو. الاستجابة: {result}")
+
+    if video.startswith(("http://", "https://")):
         import requests
         r = requests.get(video, timeout=180)
         r.raise_for_status()
@@ -83,61 +79,7 @@ def localize_video(video):
 
     return video
 
-def generate_wan_video(prompt_text, size, watermark_value):
-    # Public official Wan2.1 Space.
-    client = Client("Wan-AI/Wan2.1")
-
-    # Submit the async generation task.
-    submitted = client.predict(
-        prompt_text,
-        size,
-        watermark_value,
-        -1,
-        api_name="/t2v_generation_async"
-    )
-
-    if not isinstance(submitted, (list, tuple)) or not submitted:
-        raise RuntimeError(f"استجابة غير متوقعة من Wan2.1: {submitted}")
-
-    task_id = submitted[0]
-    status = submitted[1] if len(submitted) > 1 else False
-
-    if not task_id:
-        raise RuntimeError(
-            "Wan2.1 رفض الطلب أو الـ Space مشغول حاليًا. جرّب مرة أخرى بعد قليل."
-        )
-
-    # The official Space checks the task using status_refresh(task_id, task, status).
-    # Keep polling for up to 15 minutes.
-    for _ in range(180):
-        time.sleep(5)
-
-        try:
-            result = client.predict(
-                task_id,
-                "t2v",
-                status,
-                api_name="/status_refresh"
-            )
-        except Exception:
-            continue
-
-        video = find_video(result)
-        if video:
-            return localize_video(video)
-
-        # status_refresh returns a status flag in the second item in current versions.
-        if isinstance(result, (list, tuple)) and len(result) > 1:
-            try:
-                status = bool(result[1])
-            except Exception:
-                pass
-
-    raise TimeoutError(
-        "الفيديو لسه في طابور Wan2.1 بعد 15 دقيقة. جرّب الطلب مرة أخرى لاحقًا."
-    )
-
-def add_arabic_voice(video_path, text):
+def add_voice(video_path, text):
     if not text.strip():
         return video_path
 
@@ -146,28 +88,24 @@ def add_arabic_voice(video_path, text):
     final = work / "yosef_ai_final.mp4"
 
     gTTS(text=text, lang="ar").save(str(voice))
-
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
 
-    cmd = [
-        ffmpeg, "-y",
-        "-i", str(video_path),
-        "-i", str(voice),
-        "-map", "0:v:0",
-        "-map", "1:a:0",
-        "-c:v", "copy",
-        "-c:a", "aac",
-        "-shortest",
-        str(final),
-    ]
-
     subprocess.run(
-        cmd,
+        [
+            ffmpeg, "-y",
+            "-i", str(video_path),
+            "-i", str(voice),
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-shortest",
+            str(final),
+        ],
         check=True,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE
+        stderr=subprocess.PIPE,
     )
-
     return str(final)
 
 if st.button("🚀 إنشاء الفيديو", type="primary", use_container_width=True):
@@ -176,15 +114,14 @@ if st.button("🚀 إنشاء الفيديو", type="primary", use_container_wid
         st.stop()
 
     try:
-        with st.spinner("🎬 جاري إنشاء الفيديو المتحرك... قد يستغرق عدة دقائق حسب ضغط الـ Space"):
-            video = generate_wan_video(
-                prompt.strip(),
-                resolution,
-                watermark
-            )
+        with st.spinner(
+            "🎬 جاري إنشاء الفيديو المتحرك... "
+            "قد يستغرق عدة دقائق حسب ضغط Wan2.1"
+        ):
+            video = generate_video(prompt.strip(), resolution, watermark)
 
             if voice_text.strip():
-                video = add_arabic_voice(video, voice_text.strip())
+                video = add_voice(video, voice_text.strip())
 
         st.success("✅ تم إنشاء الفيديو بنجاح!")
         st.video(video)
@@ -195,9 +132,12 @@ if st.button("🚀 إنشاء الفيديو", type="primary", use_container_wid
                 data=f,
                 file_name="yosef_ai_video.mp4",
                 mime="video/mp4",
-                use_container_width=True
+                use_container_width=True,
             )
 
     except Exception as e:
         st.error("❌ حصل خطأ أثناء توليد الفيديو.")
         st.code(str(e))
+        st.info(
+            "لو ظهر أن الـ Space مشغول أو عليه ضغط، جرّب مرة أخرى بعد قليل."
+        )
