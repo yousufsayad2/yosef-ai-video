@@ -45,7 +45,6 @@ def start_veo(api_key, prompt, model):
         "parameters": {
             "aspectRatio": "9:16",
             "resolution": "720p",
-            "numberOfVideos": 1,
         },
     }
 
