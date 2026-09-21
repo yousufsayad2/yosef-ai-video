@@ -1,5 +1,4 @@
 import os
-import time
 import tempfile
 import subprocess
 from pathlib import Path
@@ -14,10 +13,12 @@ st.set_page_config(page_title="Yosef AI Video", page_icon="🎬", layout="center
 st.title("🎬 Yosef AI Video")
 st.caption("متحرك + تعليق صوتي AI حوّل وصفك إلى فيديو")
 
-if "task_id" not in st.session_state:
-    st.session_state.task_id = None
-if "video_url" not in st.session_state:
-    st.session_state.video_url = None
+if "wan_client" not in st.session_state:
+    st.session_state.wan_client = None
+if "wan_job" not in st.session_state:
+    st.session_state.wan_job = None
+if "wan_video" not in st.session_state:
+    st.session_state.wan_video = None
 
 prompt = st.text_area(
     "🎥 وصف الفيديو",
@@ -39,7 +40,7 @@ resolution = st.selectbox(
 
 watermark = st.checkbox("إضافة علامة Wan2.1", value=False)
 
-def extract_value(value):
+def extract_video(value):
     if value is None:
         return None
 
@@ -49,21 +50,28 @@ def extract_value(value):
         return None
 
     if isinstance(value, dict):
-        for key in ("video", "url", "path", "file", "value"):
+        # Current Wan2.1 returns:
+        # {"value": {"video": "/tmp/gradio/..."}, "__type__": "update"}
+        if "value" in value:
+            found = extract_video(value["value"])
+            if found:
+                return found
+
+        for key in ("video", "path", "url", "file", "name"):
             if key in value:
-                found = extract_value(value[key])
+                found = extract_video(value[key])
                 if found:
                     return found
 
     if isinstance(value, (list, tuple)):
         for item in value:
-            found = extract_value(item)
+            found = extract_video(item)
             if found:
                 return found
 
     return None
 
-def download_video(value):
+def download_remote(value):
     if not value:
         return None
 
@@ -77,77 +85,24 @@ def download_video(value):
 
     return value
 
-def submit_wan(prompt_text, size, watermark_value):
+def submit_video(text, size, mark):
     client = Client("Wan-AI/Wan2.1")
 
-    # IMPORTANT:
-    # The current public Space exposes the async function, not the old
-    # /t2v_generation function.
-    result = client.predict(
-        prompt_text,
+    # The official Space stores the task in Gradio State.
+    # External callers should NOT try to extract the State output:
+    # it may appear as {"__type__":"update"}.
+    # Keep the SAME Client session and poll /status_refresh later.
+    job = client.submit(
+        text,
         size,
-        watermark_value,
+        mark,
         -1,
         api_name="/t2v_generation_async"
     )
 
-    # Gradio can return component-update dictionaries in the response.
-    # The task id is the string output; do not assume it is result[0].
-    def find_task_id(value):
-        if isinstance(value, str):
-            text = value.strip()
-            if text and not text.startswith(("http://", "https://")):
-                # DashScope task IDs are long alphanumeric/UUID-like strings.
-                if len(text) >= 12:
-                    return text
-            return None
+    return client, job
 
-        if isinstance(value, (list, tuple)):
-            for item in value:
-                found = find_task_id(item)
-                if found:
-                    return found
-
-        if isinstance(value, dict):
-            # Ignore Gradio component update objects.
-            if value.get("__type__") == "update":
-                return None
-            for item in value.values():
-                found = find_task_id(item)
-                if found:
-                    return found
-
-        return None
-
-    task_id = find_task_id(result)
-
-    if not task_id:
-        raise RuntimeError(
-            f"لم أستطع استخراج رقم المهمة من استجابة Wan2.1: {result}"
-        )
-
-    return task_id
-
-def check_wan(task_id):
-    client = Client("Wan-AI/Wan2.1")
-
-    result = client.predict(
-        task_id,
-        "t2v",
-        False,
-        api_name="/status_refresh"
-    )
-
-    video = extract_value(result)
-
-    # status_refresh returns the generated video as the first output
-    # when the task is complete.
-    if video:
-        return download_video(video), result
-
-    return None, result
-
-def add_arabic_voice(video_path, text):
+def add_voice(video_path, text):
     if not text.strip():
         return video_path
 
@@ -177,65 +132,55 @@ def add_arabic_voice(video_path, text):
 
     return str(final)
 
-st.divider()
-
 if st.button("🚀 إنشاء الفيديو", type="primary", use_container_width=True):
     if not prompt.strip():
         st.warning("اكتب وصف الفيديو الأول.")
         st.stop()
 
     try:
-        with st.spinner("📨 جاري إرسال الفيديو إلى Wan2.1..."):
-            task_id = submit_wan(
-                prompt.strip(),
-                resolution,
-                watermark
-            )
+        with st.spinner("📨 جاري إرسال الطلب إلى Wan2.1..."):
+            client, job = submit_video(prompt.strip(), resolution, watermark)
 
-        st.session_state.task_id = task_id
-        st.session_state.video_url = None
+        st.session_state.wan_client = client
+        st.session_state.wan_job = job
+        st.session_state.wan_video = None
 
-        st.success("✅ تم إرسال الطلب بنجاح!")
-        st.info(
-            "🎬 الفيديو بيتعمل على Wan2.1. "
-            "اضغط «🔄 فحص حالة الفيديو» كل شوية لحد ما يخلص."
-        )
-        st.code(task_id)
-
+        st.success("✅ الطلب اتبعت بنجاح!")
+        st.info("⏳ استنى شوية، وبعدها اضغط «🔄 فحص حالة الفيديو».")
     except Exception as e:
         st.error("❌ حصل خطأ أثناء إرسال الطلب.")
         st.code(str(e))
 
-if st.session_state.task_id:
+if st.session_state.wan_client is not None:
     st.divider()
-    st.write("🆔 **رقم مهمة الفيديو:**")
-    st.code(st.session_state.task_id)
 
     if st.button("🔄 فحص حالة الفيديو", use_container_width=True):
         try:
-            with st.spinner("🔎 بنفحص حالة الفيديو..."):
-                video, raw = check_wan(st.session_state.task_id)
-
-            if video:
-                st.session_state.video_url = video
-                st.success("🎉 الفيديو خلص!")
-
-            else:
-                st.info(
-                    "⏳ لسه بيتعمل. استنى شوية واضغط «فحص حالة الفيديو» مرة تانية."
+            with st.spinner("🔎 جاري فحص حالة الفيديو..."):
+                result = st.session_state.wan_client.predict(
+                    api_name="/status_refresh"
                 )
 
+            video = extract_video(result)
+
+            if video:
+                video = download_remote(video)
+                st.session_state.wan_video = video
+                st.success("🎉 الفيديو خلص!")
+            else:
+                st.info("⏳ لسه بيتعمل. اضغط فحص الحالة مرة تانية بعد شوية.")
+
         except Exception as e:
-            st.warning("⚠️ لسه ما خلصش أو الـ Space عليه ضغط.")
+            st.warning("⚠️ لسه بيتعمل أو الـ Space عليه ضغط.")
             st.code(str(e))
 
-if st.session_state.video_url:
-    video = st.session_state.video_url
+if st.session_state.wan_video:
+    video = st.session_state.wan_video
 
     if voice_text.strip():
         try:
             with st.spinner("🎙️ جاري إضافة التعليق الصوتي..."):
-                video = add_arabic_voice(video, voice_text.strip())
+                video = add_voice(video, voice_text.strip())
         except Exception as e:
             st.warning("الفيديو جاهز، لكن إضافة الصوت فشلت.")
             st.code(str(e))
