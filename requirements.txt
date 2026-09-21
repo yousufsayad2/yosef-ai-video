@@ -1,3 +1,4 @@
 streamlit
-requests
+huggingface_hub>=1.0.0
+gTTS
 imageio-ffmpeg
