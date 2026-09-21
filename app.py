@@ -25,9 +25,6 @@ def call_ai(api_key, prompt, model=DEFAULT_GEMINI_MODEL):
     api_key = api_key.strip().strip('"').strip("'")
     if not api_key:
         raise RuntimeError("مفتاح Gemini غير موجود.")
-    if not (api_key.startswith("AIza") or api_key.startswith("AQ.")):
-        raise RuntimeError("مفتاح Gemini غير صحيح أو لم يتم لصقه بالكامل.")
-
     url = f"{GEMINI_URL}/{model}:generateContent"
     payload = {
         "systemInstruction": {
