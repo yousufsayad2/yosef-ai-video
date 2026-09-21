@@ -4,133 +4,186 @@ import tempfile
 from pathlib import Path
 
 import streamlit as st
+from gradio_client import Client
 from gtts import gTTS
-from huggingface_hub import InferenceClient
 import imageio_ffmpeg
 
-st.set_page_config(page_title="Yosef AI Video", page_icon="🎬", layout="centered")
+
+st.set_page_config(
+    page_title="Yosef AI Video",
+    page_icon="🎬",
+    layout="centered",
+)
 
 st.title("🎬 Yosef AI Video")
-st.caption("حوّل وصفك إلى فيديو AI متحرك + تعليق صوتي")
-
-hf_token = st.secrets.get("HF_TOKEN", os.getenv("HF_TOKEN", "")).strip()
+st.write("حوّل وصفك إلى فيديو AI متحرك + تعليق صوتي")
+st.info("الفيديو يتم توليده من Wan2.1 عبر مساحة عامة على Hugging Face. قد يستغرق التوليد عدة دقائق حسب ضغط الخدمة.")
 
 prompt = st.text_area(
     "🎥 وصف الفيديو",
-    placeholder="مثال: شاب مصري يمشي في شارع القاهرة وقت الغروب، حركة كاميرا سينمائية ناعمة، واقعية عالية، إضاءة دافئة",
-    height=130,
+    height=180,
+    placeholder="مثال: شاب مصري يمشي في شارع بالقاهرة وقت الغروب، السيارات والأشخاص يتحركون في الخلفية، والكاميرا تتحرك بجانبه بحركة سينمائية واقعية..."
 )
 
 voice_text = st.text_area(
     "🎙️ الكلام اللي يتقال في الفيديو (اختياري)",
-    placeholder="مثال: أهلاً بكم في تجربة جديدة من يوسف AI",
-    height=100,
+    height=120,
+    placeholder="اكتب الجملة التي تريد سماعها بالعربية..."
 )
 
-if st.button("🚀 إنشاء الفيديو", use_container_width=True):
-    if not hf_token:
-        st.error("❌ HF_TOKEN غير موجود في Streamlit Secrets.")
-        st.stop()
+resolution = st.selectbox(
+    "📐 جودة/مقاس الفيديو",
+    ["1280*720", "960*960", "720*1280"],
+    index=0,
+)
 
-    if not prompt.strip():
-        st.warning("⚠️ اكتب وصف الفيديو أولاً.")
-        st.stop()
+watermark = st.checkbox("إضافة علامة Wan2.1", value=False)
 
-    with st.spinner("🎬 جاري إنشاء الفيديو المتحرك..."):
-        errors = []
+def get_video_url(result):
+    """Extract a video URL/path from Gradio's returned value."""
+    if isinstance(result, str):
+        return result
 
-        # Hugging Face documents Wan2.1 1.3B on fal-ai for text-to-video.
-        models = [
-            "Wan-AI/Wan2.1-T2V-1.3B",
-            "tencent/HunyuanVideo",
+    if isinstance(result, (list, tuple)):
+        for item in result:
+            if isinstance(item, str) and (
+                item.startswith("http://")
+                or item.startswith("https://")
+                or item.endswith(".mp4")
+            ):
+                return item
+            if isinstance(item, dict):
+                for key in ("video", "url", "path"):
+                    value = item.get(key)
+                    if isinstance(value, str):
+                        return value
+
+    if isinstance(result, dict):
+        for key in ("video", "url", "path"):
+            value = result.get(key)
+            if isinstance(value, str):
+                return value
+
+    return None
+
+
+def download_video(url, output_path):
+    """Download a remote video URL using ffmpeg."""
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-i", url,
+        "-c", "copy",
+        output_path,
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+
+
+def add_arabic_voice(video_path, text, output_path):
+    """Create Arabic TTS and merge it with the generated video."""
+    if not text.strip():
+        return False
+
+    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as audio_file:
+        audio_path = audio_file.name
+
+    try:
+        tts = gTTS(text=text.strip(), lang="ar")
+        tts.save(audio_path)
+
+        ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+        cmd = [
+            ffmpeg,
+            "-y",
+            "-i", video_path,
+            "-i", audio_path,
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-shortest",
+            output_path,
         ]
+        subprocess.run(cmd, check=True, capture_output=True)
+        return True
+    finally:
+        try:
+            os.remove(audio_path)
+        except OSError:
+            pass
 
-        video_bytes = None
 
-        for model_id in models:
-            try:
-                client = InferenceClient(
-                    provider="fal-ai",
-                    api_key=hf_token,
-                    timeout=600,
-                )
+if st.button("🚀 إنشاء الفيديو", type="primary", use_container_width=True):
+    if not prompt.strip():
+        st.warning("اكتب وصف الفيديو الأول.")
+        st.stop()
 
-                video_bytes = client.text_to_video(
-                    prompt=(
-                        prompt.strip()
-                        + ". Cinematic realistic video, natural motion, "
-                          "smooth camera movement, realistic lighting, detailed environment, "
-                          "high quality, no text, no subtitles."
-                    ),
-                    model=model_id,
-                )
+    progress = st.empty()
+    progress.info("⏳ جاري الاتصال بـ Wan2.1...")
 
-                if isinstance(video_bytes, (bytes, bytearray)) and len(video_bytes) > 1000:
-                    break
+    try:
+        # Public Wan2.1 Space. It exposes the t2v_generation endpoint.
+        client = Client("Wan-AI/Wan2.1")
 
-                errors.append(f"{model_id}: لم يرجع ملف فيديو صالحًا.")
-                video_bytes = None
+        progress.info("🎬 جاري توليد الفيديو المتحرك... قد يستغرق عدة دقائق.")
 
-            except Exception as e:
-                errors.append(f"{model_id}: {type(e).__name__}: {e}")
-                video_bytes = None
+        result = client.predict(
+            prompt.strip(),
+            resolution,
+            watermark,
+            -1,
+            api_name="/t2v_generation",
+        )
 
-        if not video_bytes:
-            joined = "\n".join(errors[-2:])
-            st.error(
-                "❌ لم ينجح توليد الفيديو من مزود Hugging Face.\n\n"
-                "تفاصيل المحاولة:\n" + joined
-            )
-            st.info(
-                "لو ظهر في التفاصيل 429 أو credits/quota فالمشكلة رصيد/حصة. "
-                "ولو ظهر KeyError: video مرة أخرى، فالمشكلة من استجابة مزود الفيديو وليست من وصفك."
-            )
+        video_url = get_video_url(result)
+
+        if not video_url:
+            st.error("لم يرجع Wan2.1 رابط فيديو صالح.")
+            st.code(str(result))
             st.stop()
 
-        try:
-            with tempfile.TemporaryDirectory() as tmpdir:
-                tmp = Path(tmpdir)
-                video_path = tmp / "video.mp4"
-                final_path = tmp / "yosef_ai_video.mp4"
-                video_path.write_bytes(bytes(video_bytes))
+        with tempfile.TemporaryDirectory() as tmp:
+            raw_video = os.path.join(tmp, "wan_video.mp4")
+            final_video = os.path.join(tmp, "yosef_ai_video.mp4")
 
-                result_bytes = bytes(video_bytes)
+            progress.info("📥 جاري تجهيز الفيديو...")
 
-                if voice_text.strip():
-                    audio_path = tmp / "voice.mp3"
-                    gTTS(text=voice_text.strip(), lang="ar").save(str(audio_path))
+            if video_url.startswith(("http://", "https://")):
+                download_video(video_url, raw_video)
+            else:
+                # Gradio may return a local path on its server.
+                # Download it through the Gradio client's file handling when possible.
+                import requests
+                response = requests.get(video_url, timeout=300)
+                response.raise_for_status()
+                Path(raw_video).write_bytes(response.content)
 
-                    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-                    cmd = [
-                        ffmpeg, "-y",
-                        "-i", str(video_path),
-                        "-i", str(audio_path),
-                        "-map", "0:v:0",
-                        "-map", "1:a:0",
-                        "-c:v", "copy",
-                        "-c:a", "aac",
-                        "-shortest",
-                        str(final_path),
-                    ]
+            if voice_text.strip():
+                progress.info("🎙️ جاري إضافة التعليق الصوتي العربي...")
+                if add_arabic_voice(raw_video, voice_text, final_video):
+                    display_path = final_video
+                else:
+                    display_path = raw_video
+            else:
+                display_path = raw_video
 
-                    ff = subprocess.run(cmd, capture_output=True, text=True)
-                    if ff.returncode != 0:
-                        raise RuntimeError("فشل دمج التعليق الصوتي مع الفيديو.")
+            video_bytes = Path(display_path).read_bytes()
 
-                    result_bytes = final_path.read_bytes()
+            progress.empty()
+            st.success("✅ الفيديو اتعمل بنجاح!")
+            st.video(video_bytes)
 
-                st.success("✅ تم إنشاء الفيديو بنجاح!")
-                st.video(result_bytes)
-                st.download_button(
-                    "⬇️ تحميل الفيديو",
-                    data=result_bytes,
-                    file_name="yosef_ai_video.mp4",
-                    mime="video/mp4",
-                    use_container_width=True,
-                )
+            st.download_button(
+                "⬇️ تحميل الفيديو",
+                data=video_bytes,
+                file_name="yosef_ai_video.mp4",
+                mime="video/mp4",
+                use_container_width=True,
+            )
 
-        except Exception as e:
-            st.error(f"❌ تم إنشاء الفيديو لكن حدث خطأ أثناء عرضه/إضافة الصوت: {e}")
-
-st.divider()
-st.caption("Yosef AI • Text-to-Video • Hugging Face Inference Providers")
+    except Exception as e:
+        progress.empty()
+        st.error("❌ حصل خطأ أثناء توليد الفيديو.")
+        st.code(str(e))
+        st.caption("لو مساحة Wan2.1 كانت مشغولة أو وصلت لحد الاستخدام، جرّب مرة أخرى بعد قليل.")
