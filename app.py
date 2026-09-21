@@ -15,8 +15,6 @@ st.caption("حوّل وصفك إلى فيديو AI متحرك + تعليق صو�
 
 hf_token = st.secrets.get("HF_TOKEN", os.getenv("HF_TOKEN", "")).strip()
 
-st.info("💡 النسخة دي تستخدم Hugging Face Inference Providers بدل Google Veo.")
-
 prompt = st.text_area(
     "🎥 وصف الفيديو",
     placeholder="مثال: شاب مصري يمشي في شارع القاهرة وقت الغروب، حركة كاميرا سينمائية ناعمة، واقعية عالية، إضاءة دافئة",
@@ -29,53 +27,50 @@ voice_text = st.text_area(
     height=100,
 )
 
-generate = st.button("🚀 إنشاء الفيديو", use_container_width=True)
-
-if generate:
+if st.button("🚀 إنشاء الفيديو", use_container_width=True):
     if not hf_token:
-        st.error("❌ لم يتم العثور على HF_TOKEN في Secrets.")
+        st.error("❌ HF_TOKEN غير موجود في Streamlit Secrets.")
         st.stop()
 
     if not prompt.strip():
         st.warning("⚠️ اكتب وصف الفيديو أولاً.")
         st.stop()
 
-    with st.spinner("🎬 جاري إنشاء الفيديو المتحرك... قد يستغرق بعض الوقت"):
+    with st.spinner("🎬 جاري إنشاء الفيديو المتحرك..."):
         try:
+            # auto lets Hugging Face select an available provider and can fail over.
             client = InferenceClient(
-                provider="fal-ai",
+                provider="auto",
                 api_key=hf_token,
                 timeout=300,
             )
 
-            enhanced_prompt = (
-                prompt.strip()
-                + ". Realistic cinematic video, natural human motion, "
-                  "smooth camera movement, detailed environment, realistic lighting, "
-                  "high quality, no text, no subtitles."
-            )
-
             video_bytes = client.text_to_video(
-                enhanced_prompt,
+                prompt=(
+                    prompt.strip()
+                    + ". Cinematic realistic video, natural motion, "
+                      "smooth camera movement, realistic lighting, detailed environment, "
+                      "high quality, no text, no subtitles."
+                ),
                 model="Wan-AI/Wan2.1-T2V-1.3B",
             )
 
-            if not video_bytes:
-                raise RuntimeError("لم يرجع مزود الفيديو أي بيانات.")
+            if not isinstance(video_bytes, (bytes, bytearray)) or not video_bytes:
+                raise RuntimeError(
+                    "مزود الفيديو لم يرجع ملف فيديو صالحًا. جرّب مرة أخرى."
+                )
 
-            with tempfile.TemporaryDirectory() as tmp:
-                tmp = Path(tmp)
+            with tempfile.TemporaryDirectory() as tmpdir:
+                tmp = Path(tmpdir)
                 video_path = tmp / "video.mp4"
                 final_path = tmp / "yosef_ai_video.mp4"
                 video_path.write_bytes(video_bytes)
 
-                output_bytes = video_bytes
+                result_bytes = bytes(video_bytes)
 
-                # إضافة تعليق صوتي اختياري باستخدام gTTS
                 if voice_text.strip():
                     audio_path = tmp / "voice.mp3"
-                    tts = gTTS(text=voice_text.strip(), lang="ar")
-                    tts.save(str(audio_path))
+                    gTTS(text=voice_text.strip(), lang="ar").save(str(audio_path))
 
                     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
                     cmd = [
@@ -89,34 +84,41 @@ if generate:
                         "-shortest",
                         str(final_path),
                     ]
-                    result = subprocess.run(
-                        cmd,
-                        capture_output=True,
-                        text=True,
-                    )
-                    if result.returncode != 0:
-                        raise RuntimeError(
-                            "فشل دمج الصوت مع الفيديو: " + result.stderr[-1000:]
-                        )
+                    ff = subprocess.run(cmd, capture_output=True, text=True)
+                    if ff.returncode != 0:
+                        raise RuntimeError("فشل دمج التعليق الصوتي مع الفيديو.")
 
-                    output_bytes = final_path.read_bytes()
+                    result_bytes = final_path.read_bytes()
 
                 st.success("✅ تم إنشاء الفيديو بنجاح!")
-                st.video(output_bytes)
+                st.video(result_bytes)
                 st.download_button(
                     "⬇️ تحميل الفيديو",
-                    data=output_bytes,
+                    data=result_bytes,
                     file_name="yosef_ai_video.mp4",
                     mime="video/mp4",
                     use_container_width=True,
                 )
 
+        except KeyError as e:
+            if str(e).strip("'") == "video":
+                st.error(
+                    "❌ مزود Hugging Face رجّع استجابة غير متوافقة مع واجهة الفيديو. "
+                    "الكود نفسه اتصل بالخدمة لكن الخدمة لم تُرجع ملف الفيديو المتوقع. "
+                    "جرّب مرة أخرى، ولو استمر الخطأ نبدّل المزود/الموديل."
+                )
+            else:
+                st.error(f"❌ خطأ في استجابة Hugging Face: {e}")
+
         except Exception as e:
             msg = str(e)
             if "429" in msg or "quota" in msg.lower() or "credit" in msg.lower():
                 st.error(
-                    "❌ مزود الفيديو رفض الطلب بسبب الرصيد/الحصة المتاحة في Hugging Face. "
-                    "Inference Providers لها أرصدة شهرية وحدود استخدام."
+                    "❌ لا يوجد رصيد/حصة كافية في Hugging Face Inference Providers لهذا الطلب."
+                )
+            elif "401" in msg or "403" in msg:
+                st.error(
+                    "❌ التوكن غير صالح أو لا يملك صلاحية Inference Providers."
                 )
             else:
                 st.error(f"❌ حصل خطأ: {msg}")
