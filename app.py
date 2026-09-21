@@ -12,40 +12,46 @@ from gtts import gTTS
 import imageio_ffmpeg
 
 APP_NAME = "Yosef AI Video"
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models"
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 
-st.set_page_config(page_title=APP_NAME, page_icon="🎬", layout="wide")
+def call_ai(api_key, prompt, model=DEFAULT_GEMINI_MODEL):
+    api_key = api_key.strip().strip('"').strip("'")
+    if not api_key:
+        raise RuntimeError("مفتاح Gemini غير موجود.")
+    if not api_key.startswith("AIza"):
+        raise RuntimeError("مفتاح Gemini غير صحيح أو لم يتم لصقه بالكامل.")
 
-st.title("🎬 Yosef AI Video")
-st.caption("حوّل فكرة إلى سيناريو + صور AI + صوت عربي + فيديو MP4")
-
-def get_secret(name):
-    try:
-        return st.secrets.get(name, "")
-    except Exception:
-        return os.getenv(name, "")
-
-def call_ai(api_key, prompt, model):
-    r = requests.post(
-        OPENROUTER_URL,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "X-Title": APP_NAME,
+    url = f"{GEMINI_URL}/{model}:generateContent"
+    params = {"key": api_key}
+    payload = {
+        "systemInstruction": {
+            "parts": [{"text": "Return only valid JSON. No markdown."}]
         },
-        json={
-            "model": model,
-            "messages": [
-                {"role": "system", "content": "Return only valid JSON. No markdown."},
-                {"role": "user", "content": prompt},
-            ],
+        "contents": [
+            {"role": "user", "parts": [{"text": prompt}]}
+        ],
+        "generationConfig": {
             "temperature": 0.7,
-        },
-        timeout=120,
-    )
-    if r.status_code != 200:
-        raise RuntimeError(f"OpenRouter HTTP {r.status_code}: {r.text}")
-    return r.json()["choices"][0]["message"]["content"]
+            "responseMimeType": "application/json"
+        }
+    }
+
+    r = requests.post(url, params=params, json=payload, timeout=120)
+
+    if not r.ok:
+        try:
+            detail = r.json().get("error", {}).get("message", r.text)
+        except Exception:
+            detail = r.text
+        raise RuntimeError(f"Gemini HTTP {r.status_code}: {detail}")
+
+    data = r.json()
+    try:
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError, TypeError):
+        raise RuntimeError("Gemini رجّع استجابة غير متوقعة.")
+
 
 def parse_json(text):
     text = re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=re.I)
@@ -200,7 +206,7 @@ with c2:
 
 if st.button("🚀 إنشاء الفيديو", type="primary", use_container_width=True):
     if not api_key.strip():
-        st.error("❌ ضع OpenRouter API Key.")
+        st.error("❌ ضع Gemini API Key.")
         st.stop()
     if not idea.strip():
         st.warning("⚠️ اكتب فكرة الفيديو.")
