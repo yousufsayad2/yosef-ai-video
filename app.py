@@ -37,34 +37,62 @@ if st.button("🚀 إنشاء الفيديو", use_container_width=True):
         st.stop()
 
     with st.spinner("🎬 جاري إنشاء الفيديو المتحرك..."):
-        try:
-            # auto lets Hugging Face select an available provider and can fail over.
-            client = InferenceClient(
-                provider="auto",
-                api_key=hf_token,
-                timeout=300,
-            )
+        errors = []
 
-            video_bytes = client.text_to_video(
-                prompt=(
-                    prompt.strip()
-                    + ". Cinematic realistic video, natural motion, "
-                      "smooth camera movement, realistic lighting, detailed environment, "
-                      "high quality, no text, no subtitles."
-                ),
-                model="Wan-AI/Wan2.1-T2V-1.3B",
-            )
+        # Hugging Face documents Wan2.1 1.3B on fal-ai for text-to-video.
+        models = [
+            "Wan-AI/Wan2.1-T2V-1.3B",
+            "tencent/HunyuanVideo",
+        ]
 
-            if not isinstance(video_bytes, (bytes, bytearray)) or not video_bytes:
-                raise RuntimeError(
-                    "مزود الفيديو لم يرجع ملف فيديو صالحًا. جرّب مرة أخرى."
+        video_bytes = None
+
+        for model_id in models:
+            try:
+                client = InferenceClient(
+                    provider="fal-ai",
+                    api_key=hf_token,
+                    timeout=600,
                 )
 
+                video_bytes = client.text_to_video(
+                    prompt=(
+                        prompt.strip()
+                        + ". Cinematic realistic video, natural motion, "
+                          "smooth camera movement, realistic lighting, detailed environment, "
+                          "high quality, no text, no subtitles."
+                    ),
+                    model=model_id,
+                )
+
+                if isinstance(video_bytes, (bytes, bytearray)) and len(video_bytes) > 1000:
+                    break
+
+                errors.append(f"{model_id}: لم يرجع ملف فيديو صالحًا.")
+                video_bytes = None
+
+            except Exception as e:
+                errors.append(f"{model_id}: {type(e).__name__}: {e}")
+                video_bytes = None
+
+        if not video_bytes:
+            joined = "\n".join(errors[-2:])
+            st.error(
+                "❌ لم ينجح توليد الفيديو من مزود Hugging Face.\n\n"
+                "تفاصيل المحاولة:\n" + joined
+            )
+            st.info(
+                "لو ظهر في التفاصيل 429 أو credits/quota فالمشكلة رصيد/حصة. "
+                "ولو ظهر KeyError: video مرة أخرى، فالمشكلة من استجابة مزود الفيديو وليست من وصفك."
+            )
+            st.stop()
+
+        try:
             with tempfile.TemporaryDirectory() as tmpdir:
                 tmp = Path(tmpdir)
                 video_path = tmp / "video.mp4"
                 final_path = tmp / "yosef_ai_video.mp4"
-                video_path.write_bytes(video_bytes)
+                video_path.write_bytes(bytes(video_bytes))
 
                 result_bytes = bytes(video_bytes)
 
@@ -84,6 +112,7 @@ if st.button("🚀 إنشاء الفيديو", use_container_width=True):
                         "-shortest",
                         str(final_path),
                     ]
+
                     ff = subprocess.run(cmd, capture_output=True, text=True)
                     if ff.returncode != 0:
                         raise RuntimeError("فشل دمج التعليق الصوتي مع الفيديو.")
@@ -100,28 +129,8 @@ if st.button("🚀 إنشاء الفيديو", use_container_width=True):
                     use_container_width=True,
                 )
 
-        except KeyError as e:
-            if str(e).strip("'") == "video":
-                st.error(
-                    "❌ مزود Hugging Face رجّع استجابة غير متوافقة مع واجهة الفيديو. "
-                    "الكود نفسه اتصل بالخدمة لكن الخدمة لم تُرجع ملف الفيديو المتوقع. "
-                    "جرّب مرة أخرى، ولو استمر الخطأ نبدّل المزود/الموديل."
-                )
-            else:
-                st.error(f"❌ خطأ في استجابة Hugging Face: {e}")
-
         except Exception as e:
-            msg = str(e)
-            if "429" in msg or "quota" in msg.lower() or "credit" in msg.lower():
-                st.error(
-                    "❌ لا يوجد رصيد/حصة كافية في Hugging Face Inference Providers لهذا الطلب."
-                )
-            elif "401" in msg or "403" in msg:
-                st.error(
-                    "❌ التوكن غير صالح أو لا يملك صلاحية Inference Providers."
-                )
-            else:
-                st.error(f"❌ حصل خطأ: {msg}")
+            st.error(f"❌ تم إنشاء الفيديو لكن حدث خطأ أثناء عرضه/إضافة الصوت: {e}")
 
 st.divider()
 st.caption("Yosef AI • Text-to-Video • Hugging Face Inference Providers")
