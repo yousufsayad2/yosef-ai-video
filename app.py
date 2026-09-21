@@ -19,7 +19,7 @@ def get_secret(name):
     except Exception:
         return ""
 
-DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+DEFAULT_GEMINI_MODEL = "gemini-3.6-flash"
 
 def call_ai(api_key, prompt, model=DEFAULT_GEMINI_MODEL):
     api_key = api_key.strip().strip('"').strip("'")
@@ -196,7 +196,7 @@ api_key = st.text_input(
 
 model = st.selectbox(
     "🤖 AI Model",
-    ["gemini-2.5-flash"],
+    ["gemini-3.6-flash"],
 )
 
 idea = st.text_area(
