@@ -51,15 +51,17 @@ def get_video(prompt_text, seconds):
     # Verified current public ZeroGPU Text-to-Video Space.
     # It exposes Text-to-Video directly and does not require the
     # old DashScope API used by Wan-AI/Wan2.1.
-    client = Client("Pyramid-Flow/pyramid-flow")
+    client = Client("Pyramid-Flow/pyramid-flow", httpx_kwargs={"timeout": 900})
 
-    result = client.predict(
+    job = client.submit(
         prompt_text,
+        None,
         seconds,
         9.0,
         5.0,
         api_name="/generate_video"
     )
+    result = job.result(timeout=900)
 
     video = find_video(result)
     if not video:
