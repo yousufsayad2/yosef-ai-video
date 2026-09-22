@@ -31,125 +31,107 @@ resolution = st.selectbox(
     index=0
 )
 
-watermark = st.checkbox("إضافة علامة Wan2.1", value=False)
-
-def extract_file(value):
-    if value is None:
-        return None
-
-    if isinstance(value, str):
-        if value.startswith(("http://", "https://")) or os.path.exists(value):
-            return value
-
-    if isinstance(value, dict):
-        for key in ("video", "path", "url", "file", "value", "name"):
-            if key in value:
-                found = extract_file(value[key])
-                if found:
-                    return found
-
-    if isinstance(value, (list, tuple)):
-        for item in value:
-            found = extract_file(item)
-            if found:
-                return found
-
-    return None
-
-def get_video():
-    # This Space is currently running on Hugging Face ZeroGPU.
-    # It is a direct text-to-video Space and does NOT use the
-    # old Wan2.1 DashScope task/status system.
-    client = Client("multimodalart/wan2-1-fast")
-
-    height, width = map(int, resolution.split("*"))
-
-    negative_prompt = (
-        "static image, still frame, blurry, low quality, "
-        "deformed face, distorted body, extra fingers, bad hands, "
-        "flicker, duplicate people, text, subtitles"
-    )
-
-    # 25 frames at 15 fps ≈ 1.7 seconds.
-    # 4 steps is the fast configuration used by the Space.
-    result = client.predict(
-        prompt.strip(),
-        negative_prompt,
-        height,
-        width,
-        25,
-        5.0,
-        4,
-        15,
-        api_name="/generate_video"
-    )
-
-    video = extract_file(result)
-
-    if not video:
-        raise RuntimeError(
-            f"لم يرجع الـ Space ملف فيديو. الاستجابة: {str(result)[:1200]}"
-        )
-
-    if video.startswith(("http://", "https://")):
-        import requests
-        r = requests.get(video, timeout=180)
-        r.raise_for_status()
-        p = Path(tempfile.gettempdir()) / "yosef_ai_video.mp4"
-        p.write_bytes(r.content)
-        return str(p)
-
-    return video
-
-def add_arabic_voice(video_path, text):
-    if not text.strip():
-        return video_path
-
-    work = Path(tempfile.mkdtemp(prefix="yosef_voice_"))
-    voice = work / "voice.mp3"
-    final = work / "yosef_ai_final.mp4"
-
-    gTTS(text=text, lang="ar").save(str(voice))
-    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-
-    subprocess.run(
-        [
-            ffmpeg, "-y",
-            "-i", str(video_path),
-            "-i", str(voice),
-            "-map", "0:v:0",
-            "-map", "1:a:0",
-            "-c:v", "copy",
-            "-c:a", "aac",
-            "-shortest",
-            str(final),
-        ],
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-
-    return str(final)
-
 if st.button("🚀 إنشاء الفيديو", type="primary", use_container_width=True):
     if not prompt.strip():
         st.warning("اكتب وصف الفيديو الأول.")
         st.stop()
 
     try:
+        height, width = map(int, resolution.split("*"))
+
+        # Current running ZeroGPU Space:
+        # Heartsync/Wan-2.1-T2V-1.3B-LoRA
+        # It exposes a direct text-to-video /generate_video function.
+        client = Client("Heartsync/Wan-2.1-T2V-1.3B-LoRA")
+
+        negative_prompt = (
+            "static, still image, blurry, low quality, distorted face, "
+            "deformed body, extra fingers, bad hands, flicker, "
+            "duplicate people, text, subtitles, watermark"
+        )
+
         with st.spinner(
             "🎬 جاري إنشاء الفيديو المتحرك... "
-            "النسخة دي سريعة نسبيًا، استنى لحد ما النتيجة تظهر."
+            "الـ GPU المجاني ممكن يحتاج شوية وقت."
         ):
-            video = get_video()
+            result = client.predict(
+                "Wan2.1-T2V-1.3B",
+                prompt.strip(),
+                negative_prompt,
+                "benjamin-paine/steamboat-willie-1.3b",
+                0.75,
+                "UniPCMultistepScheduler",
+                3.0,
+                height,
+                width,
+                49,
+                5.0,
+                10,
+                16,
+                api_name="/generate_video"
+            )
 
-            if voice_text.strip():
-                video = add_arabic_voice(video, voice_text.strip())
+        if isinstance(result, str) and result:
+            video_path = result
+        elif isinstance(result, dict):
+            video_path = result.get("video") or result.get("path") or result.get("value")
+        elif isinstance(result, (list, tuple)):
+            video_path = next(
+                (
+                    x for x in result
+                    if isinstance(x, str) and (
+                        x.startswith(("http://", "https://")) or os.path.exists(x)
+                    )
+                ),
+                None
+            )
+        else:
+            video_path = None
+
+        if not video_path:
+            raise RuntimeError(
+                f"لم يرجع الـ Space ملف فيديو. الاستجابة: {str(result)[:1200]}"
+            )
+
+        if video_path.startswith(("http://", "https://")):
+            import requests
+            r = requests.get(video_path, timeout=240)
+            r.raise_for_status()
+            local = Path(tempfile.gettempdir()) / "yosef_ai_video.mp4"
+            local.write_bytes(r.content)
+            video_path = str(local)
+
+        # Optional Arabic voice
+        if voice_text.strip():
+            work = Path(tempfile.mkdtemp(prefix="yosef_voice_"))
+            voice = work / "voice.mp3"
+            final = work / "yosef_ai_final.mp4"
+
+            gTTS(text=voice_text.strip(), lang="ar").save(str(voice))
+            ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+
+            subprocess.run(
+                [
+                    ffmpeg, "-y",
+                    "-i", str(video_path),
+                    "-i", str(voice),
+                    "-map", "0:v:0",
+                    "-map", "1:a:0",
+                    "-c:v", "copy",
+                    "-c:a", "aac",
+                    "-shortest",
+                    str(final),
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            video_path = str(final)
 
         st.success("🎉 تم إنشاء الفيديو بنجاح!")
-        st.video(video)
+        st.video(video_path)
 
-        with open(video, "rb") as f:
+        with open(video_path, "rb") as f:
             st.download_button(
                 "⬇️ تحميل الفيديو",
                 data=f,
@@ -161,6 +143,4 @@ if st.button("🚀 إنشاء الفيديو", type="primary", use_container_wid
     except Exception as e:
         st.error("❌ حصل خطأ أثناء توليد الفيديو.")
         st.code(str(e))
-        st.info(
-            "لو ظهر أن الـ Space مشغول، جرّب مرة أخرى بعد قليل."
-        )
+        st.info("لو الـ Space عليه ضغط، جرّب مرة أخرى بعد قليل.")
