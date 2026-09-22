@@ -1,7 +1,6 @@
-import streamlit as st
-import requests
-import json
 import io
+import requests
+import streamlit as st
 from gtts import gTTS
 
 st.set_page_config(
@@ -10,6 +9,13 @@ st.set_page_config(
     layout="centered"
 )
 
+# حفظ البيانات أثناء إعادة تشغيل Streamlit
+if "result" not in st.session_state:
+    st.session_state.result = ""
+
+if "voice_audio" not in st.session_state:
+    st.session_state.voice_audio = None
+
 st.title("🎬 Yosef AI Studio")
 st.caption("من فكرة بسيطة إلى قصة وشخصيات ومشاهد وتعليق صوتي")
 
@@ -17,30 +23,19 @@ st.divider()
 
 idea = st.text_area(
     "💡 فكرة القصة",
-    placeholder="مثال: شاب مصري يجد روبوتًا صغيرًا في شارع القاهرة ويكتشف أنه يستطيع التنبؤ بالمستقبل...",
-    height=120
+    placeholder="مثال: شاب مصري يكتشف روبوتًا صغيرًا في شارع القاهرة...",
+    height=130
 )
 
-col1, col2 = st.columns(2)
+duration = st.selectbox(
+    "⏱️ مدة القصة",
+    ["30 ثانية", "1 دقيقة", "2 دقيقة", "3 دقائق"]
+)
 
-with col1:
-    duration = st.selectbox(
-        "⏱️ مدة القصة",
-        ["30 ثانية", "1 دقيقة", "2 دقيقة", "3 دقائق"]
-    )
-
-with col2:
-    style = st.selectbox(
-        "🎨 أسلوب الفيديو",
-        [
-            "سينمائي واقعي",
-            "أنمي",
-            "كرتوني",
-            "خيال علمي",
-            "رعب",
-            "مغامرات"
-        ]
-    )
+style = st.selectbox(
+    "🎨 أسلوب الفيديو",
+    ["سينمائي واقعي", "أنمي", "كرتوني", "خيال علمي", "رعب", "مغامرات"]
+)
 
 language = st.selectbox(
     "🌍 اللغة",
@@ -53,22 +48,22 @@ if st.button("🚀 إنشاء القصة والشخصيات", use_container_widt
 
     if not idea.strip():
         st.warning("اكتب فكرة القصة الأول.")
-        st.stop()
+    else:
 
-    api_key = None
+        api_key = None
 
-    try:
-        api_key = st.secrets["GEMINI_API_KEY"]
-    except:
         try:
-            api_key = st.secrets["GOOGLE_API_KEY"]
-        except:
-            pass
+            api_key = st.secrets["GEMINI_API_KEY"]
+        except Exception:
+            try:
+                api_key = st.secrets["GOOGLE_API_KEY"]
+            except Exception:
+                pass
 
-    prompt = f"""
+        prompt = f"""
 أنت كاتب ومخرج أفلام محترف.
 
-حوّل فكرة المستخدم التالية إلى مشروع فيديو كامل:
+حوّل الفكرة التالية إلى مشروع فيديو كامل.
 
 فكرة المستخدم:
 {idea}
@@ -82,77 +77,74 @@ if st.button("🚀 إنشاء القصة والشخصيات", use_container_widt
 اللغة:
 {language}
 
-أريد النتيجة بالعربية، منظمة بهذا الشكل:
+اكتب بالعربية ونسّق النتيجة كالتالي:
 
-1. عنوان القصة
+# عنوان القصة
 
-2. ملخص القصة
+## ملخص القصة
 
-3. الشخصيات الرئيسية:
+## الشخصيات الرئيسية
+
 لكل شخصية:
 - الاسم
-- العمر التقريبي
+- العمر
 - الشكل
+- الشعر
 - الملابس
 - الشخصية
 - طريقة الكلام
 
-4. ثبات الشخصيات:
-اكتب وصفًا ثابتًا لكل شخصية يمكن استخدامه في كل مشهد حتى لا يتغير شكلها.
+## ثبات الشخصيات
 
-5. المشاهد:
-قسّم القصة إلى مشاهد قصيرة.
+اكتب وصفًا ثابتًا لكل شخصية لاستخدامه في جميع المشاهد.
+
+## المشاهد
+
 لكل مشهد:
 - رقم المشهد
 - المكان
 - الوقت
-- ماذا يحدث
+- الأحداث
 - حركة الشخصيات
 - حركة الكاميرا
 - الإضاءة
 - الحوار
 - Video Prompt باللغة الإنجليزية
 
-6. التعليق الصوتي:
-اكتب النص كاملًا جاهزًا للتحويل إلى صوت.
+## التعليق الصوتي
 
-اجعل الأحداث مترابطة والشخصيات ثابتة بصريًا.
+اكتب نص التعليق الصوتي كاملًا.
+
+اجعل القصة مترابطة والشخصيات ثابتة في الشكل والملابس.
 """
 
-    result = None
+        result = ""
 
-    if api_key:
+        if api_key:
 
-        headers = {
-            "Content-Type": "application/json",
-            "x-goog-api-key": api_key
-        }
+            headers = {
+                "Content-Type": "application/json",
+                "x-goog-api-key": api_key
+            }
 
-        models = [
-            "gemini-3.6-flash",
-            "gemini-2.5-flash"
-        ]
+            url = (
+                "https://generativelanguage.googleapis.com/"
+                "v1beta/models/gemini-3.6-flash:generateContent"
+            )
 
-        for model in models:
+            payload = {
+                "contents": [
+                    {
+                        "parts": [
+                            {
+                                "text": prompt
+                            }
+                        ]
+                    }
+                ]
+            }
 
             try:
-                url = (
-                    "https://generativelanguage.googleapis.com/"
-                    f"v1beta/models/{model}:generateContent"
-                )
-
-                payload = {
-                    "contents": [
-                        {
-                            "parts": [
-                                {
-                                    "text": prompt
-                                }
-                            ]
-                        }
-                    ]
-                }
-
                 response = requests.post(
                     url,
                     headers=headers,
@@ -161,98 +153,53 @@ if st.button("🚀 إنشاء القصة والشخصيات", use_container_widt
                 )
 
                 if response.ok:
-
                     data = response.json()
 
                     result = (
                         data["candidates"][0]
                         ["content"]["parts"][0]["text"]
                     )
+                else:
+                    st.error("Gemini رجّع خطأ. تأكد من الـAPI Key في Secrets.")
 
-                    break
+            except Exception as e:
+                st.error(f"حدث خطأ: {e}")
 
-            except Exception:
-                pass
+        else:
+            st.error(
+                "مش لاقي GEMINI_API_KEY في Streamlit Secrets."
+            )
 
-    # Fallback لو Gemini مش متاح
-    if not result:
+        if result:
+            st.session_state.result = result
+            st.session_state.voice_audio = None
 
-        result = f"""
-# 🎬 {idea[:50]}
 
-## 📖 القصة
+# عرض النتيجة المحفوظة
+if st.session_state.result:
 
-تبدأ القصة عندما يكتشف بطلنا سرًا غامضًا مرتبطًا بهذه الفكرة:
+    st.success("✅ القصة والشخصيات اتعملوا!")
 
-{idea}
-
-يبدأ البطل في البحث عن الحقيقة، وخلال رحلته يواجه مجموعة من الأحداث
-المفاجئة التي تغيّر حياته.
-
-## 🎭 الشخصيات
-
-### الشخصية الرئيسية
-- الاسم: آدم
-- العمر: 22 سنة
-- الشكل: شاب مصري، شعر أسود قصير، مظهر طبيعي.
-- الملابس: تيشيرت وبنطلون جينز.
-- الشخصية: فضولي وشجاع.
-- طريقة الكلام: مصرية بسيطة.
-
-### الشخصية الثانية
-- الاسم: نور
-- العمر: 21 سنة
-- الشكل: شابة مصرية بمظهر طبيعي.
-- الملابس: ملابس عصرية بسيطة.
-- الشخصية: ذكية وهادئة.
-
-## 🎥 المشاهد
-
-### المشهد 1
-المكان: شارع في القاهرة وقت الغروب.
-
-يظهر آدم وهو يمشي في الشارع وينظر حوله.
-
-حركة الكاميرا:
-الكاميرا تتحرك بجانبه بشكل سينمائي.
-
-Video Prompt:
-A young Egyptian man walking naturally through a busy Cairo street
-at sunset, realistic pedestrians and cars, cinematic tracking camera,
-natural body movement, realistic clothing motion, photorealistic,
-high detail.
-
-### المشهد 2
-يكتشف آدم الشيء الغامض الذي سيغيّر أحداث القصة.
-
-Video Prompt:
-The same young Egyptian man discovers something mysterious,
-cinematic close-up, realistic facial expression, natural movement,
-dramatic lighting, photorealistic cinematic film.
-
-## 🎙️ التعليق الصوتي
-
-تبدأ الحكاية في مساء عادي جدًا...
-لكن آدم لم يكن يعرف أن هذا اليوم سيغيّر حياته إلى الأبد.
-"""
-
-    st.success("✅ القصة اتعملت!")
-
-    st.markdown(result)
+    st.markdown(st.session_state.result)
 
     st.divider()
 
-    st.subheader("🎙️ إنشاء التعليق الصوتي")
+    st.subheader("🎙️ التعليق الصوتي")
 
     voice_text = st.text_area(
         "النص الصوتي",
-        value=result,
-        height=200
+        value=st.session_state.result,
+        height=250,
+        key="voice_text"
     )
 
-    if st.button("🔊 إنشاء الصوت العربي", use_container_width=True):
+    if st.button(
+        "🔊 إنشاء الصوت العربي",
+        use_container_width=True
+    ):
 
         try:
+
             tts = gTTS(
                 text=voice_text,
                 lang="ar",
@@ -262,24 +209,30 @@ dramatic lighting, photorealistic cinematic film.
             audio = io.BytesIO()
             tts.write_to_fp(audio)
 
-            audio.seek(0)
-
-            st.audio(audio, format="audio/mp3")
-
-            st.download_button(
-                "⬇️ تحميل الصوت MP3",
-                data=audio,
-                file_name="yosef_ai_voice.mp3",
-                mime="audio/mpeg",
-                use_container_width=True
-            )
+            st.session_state.voice_audio = audio.getvalue()
 
             st.success("🎙️ الصوت جاهز!")
 
         except Exception as e:
-            st.error(f"حصل خطأ في إنشاء الصوت: {e}")
+            st.error(f"حدث خطأ في الصوت: {e}")
+
+    if st.session_state.voice_audio:
+
+        st.audio(
+            st.session_state.voice_audio,
+            format="audio/mp3"
+        )
+
+        st.download_button(
+            "⬇️ تحميل الصوت MP3",
+            data=st.session_state.voice_audio,
+            file_name="yosef_ai_voice.mp3",
+            mime="audio/mpeg",
+            use_container_width=True
+        )
 
 else:
+
     st.info(
         "💡 اكتب فكرة القصة واضغط «إنشاء القصة والشخصيات»."
             )
