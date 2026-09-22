@@ -27,13 +27,13 @@ voice_text = st.text_area(
 
 resolution = st.selectbox(
     "📐 جودة/مقاس الفيديو",
-    ["1280*720", "960*960", "720*1280"],
+    ["480*832", "512*768", "384*640"],
     index=0
 )
 
 watermark = st.checkbox("إضافة علامة Wan2.1", value=False)
 
-def extract_video(value):
+def extract_file(value):
     if value is None:
         return None
 
@@ -42,82 +42,66 @@ def extract_video(value):
             return value
 
     if isinstance(value, dict):
-        if value.get("__type__") == "update":
-            return extract_video(value.get("value"))
-
         for key in ("video", "path", "url", "file", "value", "name"):
             if key in value:
-                found = extract_video(value[key])
+                found = extract_file(value[key])
                 if found:
                     return found
 
     if isinstance(value, (list, tuple)):
         for item in value:
-            found = extract_video(item)
+            found = extract_file(item)
             if found:
                 return found
 
-    for attr in ("path", "url", "name", "value"):
-        try:
-            x = getattr(value, attr)
-            if isinstance(x, str) and (
-                x.startswith(("http://", "https://")) or os.path.exists(x)
-            ):
-                return x
-        except Exception:
-            pass
-
     return None
 
-def make_local(video):
+def get_video():
+    # This Space is currently running on Hugging Face ZeroGPU.
+    # It is a direct text-to-video Space and does NOT use the
+    # old Wan2.1 DashScope task/status system.
+    client = Client("multimodalart/wan2-1-fast")
+
+    height, width = map(int, resolution.split("*"))
+
+    negative_prompt = (
+        "static image, still frame, blurry, low quality, "
+        "deformed face, distorted body, extra fingers, bad hands, "
+        "flicker, duplicate people, text, subtitles"
+    )
+
+    # 25 frames at 15 fps ≈ 1.7 seconds.
+    # 4 steps is the fast configuration used by the Space.
+    result = client.predict(
+        prompt.strip(),
+        negative_prompt,
+        height,
+        width,
+        25,
+        5.0,
+        4,
+        15,
+        api_name="/generate_video"
+    )
+
+    video = extract_file(result)
+
     if not video:
-        return None
+        raise RuntimeError(
+            f"لم يرجع الـ Space ملف فيديو. الاستجابة: {str(result)[:1200]}"
+        )
 
     if video.startswith(("http://", "https://")):
         import requests
-        r = requests.get(video, timeout=240)
+        r = requests.get(video, timeout=180)
         r.raise_for_status()
-        p = Path(tempfile.gettempdir()) / "yosef_wan22.mp4"
+        p = Path(tempfile.gettempdir()) / "yosef_ai_video.mp4"
         p.write_bytes(r.content)
         return str(p)
 
     return video
 
-def generate_wan22(text, size):
-    """
-    Use Wan-AI/Wan-2.2-5B direct generation.
-    This avoids Wan2.1's hidden Gradio State/task polling.
-    """
-    client = Client("Wan-AI/Wan-2.2-5B")
-
-    h, w = map(int, size.split("*"))
-
-    # Wan-2.2-5B's public Gradio endpoint:
-    # image, prompt, height, width, duration_seconds,
-    # sampling_steps, guide_scale, shift, seed
-    result = client.predict(
-        None,
-        text,
-        h,
-        w,
-        3.0,
-        30,
-        5.0,
-        5.0,
-        -1,
-        api_name="/generate_video"
-    )
-
-    video = extract_video(result)
-
-    if not video:
-        raise RuntimeError(
-            f"Wan2.2 لم يرجع ملف فيديو. الاستجابة: {str(result)[:1000]}"
-        )
-
-    return make_local(video)
-
-def add_voice(video_path, text):
+def add_arabic_voice(video_path, text):
     if not text.strip():
         return video_path
 
@@ -155,12 +139,12 @@ if st.button("🚀 إنشاء الفيديو", type="primary", use_container_wid
     try:
         with st.spinner(
             "🎬 جاري إنشاء الفيديو المتحرك... "
-            "قد يستغرق حوالي 1–5 دقائق حسب ضغط الـ GPU"
+            "النسخة دي سريعة نسبيًا، استنى لحد ما النتيجة تظهر."
         ):
-            video = generate_wan22(prompt.strip(), resolution)
+            video = get_video()
 
             if voice_text.strip():
-                video = add_voice(video, voice_text.strip())
+                video = add_arabic_voice(video, voice_text.strip())
 
         st.success("🎉 تم إنشاء الفيديو بنجاح!")
         st.video(video)
@@ -178,5 +162,5 @@ if st.button("🚀 إنشاء الفيديو", type="primary", use_container_wid
         st.error("❌ حصل خطأ أثناء توليد الفيديو.")
         st.code(str(e))
         st.info(
-            "لو ظهر أن الـ Space مشغول، انتظر قليلًا ثم جرّب الطلب مرة أخرى."
+            "لو ظهر أن الـ Space مشغول، جرّب مرة أخرى بعد قليل."
         )
