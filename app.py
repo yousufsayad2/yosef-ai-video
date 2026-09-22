@@ -11,14 +11,7 @@ import imageio_ffmpeg
 st.set_page_config(page_title="Yosef AI Video", page_icon="🎬", layout="centered")
 
 st.title("🎬 Yosef AI Video")
-st.caption("متحرك + تعليق صوتي AI حوّل وصفك إلى فيديو")
-
-if "wan_client" not in st.session_state:
-    st.session_state.wan_client = None
-if "wan_job" not in st.session_state:
-    st.session_state.wan_job = None
-if "wan_video" not in st.session_state:
-    st.session_state.wan_video = None
+st.caption("فيديو AI متحرك + تعليق صوتي عربي")
 
 prompt = st.text_area(
     "🎥 وصف الفيديو",
@@ -34,7 +27,7 @@ voice_text = st.text_area(
 
 resolution = st.selectbox(
     "📐 جودة/مقاس الفيديو",
-    ["1280*720", "960*960", "720*1280", "1088*832", "832*1088"],
+    ["1280*720", "960*960", "720*1280"],
     index=0
 )
 
@@ -47,17 +40,12 @@ def extract_video(value):
     if isinstance(value, str):
         if value.startswith(("http://", "https://")) or os.path.exists(value):
             return value
-        return None
 
     if isinstance(value, dict):
-        # Current Wan2.1 returns:
-        # {"value": {"video": "/tmp/gradio/..."}, "__type__": "update"}
-        if "value" in value:
-            found = extract_video(value["value"])
-            if found:
-                return found
+        if value.get("__type__") == "update":
+            return extract_video(value.get("value"))
 
-        for key in ("video", "path", "url", "file", "name"):
+        for key in ("video", "path", "url", "file", "value", "name"):
             if key in value:
                 found = extract_video(value[key])
                 if found:
@@ -69,38 +57,65 @@ def extract_video(value):
             if found:
                 return found
 
+    for attr in ("path", "url", "name", "value"):
+        try:
+            x = getattr(value, attr)
+            if isinstance(x, str) and (
+                x.startswith(("http://", "https://")) or os.path.exists(x)
+            ):
+                return x
+        except Exception:
+            pass
+
     return None
 
-def download_remote(value):
-    if not value:
+def make_local(video):
+    if not video:
         return None
 
-    if value.startswith(("http://", "https://")):
+    if video.startswith(("http://", "https://")):
         import requests
-        r = requests.get(value, timeout=180)
+        r = requests.get(video, timeout=240)
         r.raise_for_status()
-        p = Path(tempfile.gettempdir()) / "yosef_wan21.mp4"
+        p = Path(tempfile.gettempdir()) / "yosef_wan22.mp4"
         p.write_bytes(r.content)
         return str(p)
 
-    return value
+    return video
 
-def submit_video(text, size, mark):
-    client = Client("Wan-AI/Wan2.1")
+def generate_wan22(text, size):
+    """
+    Use Wan-AI/Wan-2.2-5B direct generation.
+    This avoids Wan2.1's hidden Gradio State/task polling.
+    """
+    client = Client("Wan-AI/Wan-2.2-5B")
 
-    # The official Space stores the task in Gradio State.
-    # External callers should NOT try to extract the State output:
-    # it may appear as {"__type__":"update"}.
-    # Keep the SAME Client session and poll /status_refresh later.
-    job = client.submit(
+    h, w = map(int, size.split("*"))
+
+    # Wan-2.2-5B's public Gradio endpoint:
+    # image, prompt, height, width, duration_seconds,
+    # sampling_steps, guide_scale, shift, seed
+    result = client.predict(
+        None,
         text,
-        size,
-        mark,
+        h,
+        w,
+        3.0,
+        30,
+        5.0,
+        5.0,
         -1,
-        api_name="/t2v_generation_async"
+        api_name="/generate_video"
     )
 
-    return client, job
+    video = extract_video(result)
+
+    if not video:
+        raise RuntimeError(
+            f"Wan2.2 لم يرجع ملف فيديو. الاستجابة: {str(result)[:1000]}"
+        )
+
+    return make_local(video)
 
 def add_voice(video_path, text):
     if not text.strip():
@@ -138,56 +153,18 @@ if st.button("🚀 إنشاء الفيديو", type="primary", use_container_wid
         st.stop()
 
     try:
-        with st.spinner("📨 جاري إرسال الطلب إلى Wan2.1..."):
-            client, job = submit_video(prompt.strip(), resolution, watermark)
+        with st.spinner(
+            "🎬 جاري إنشاء الفيديو المتحرك... "
+            "قد يستغرق حوالي 1–5 دقائق حسب ضغط الـ GPU"
+        ):
+            video = generate_wan22(prompt.strip(), resolution)
 
-        st.session_state.wan_client = client
-        st.session_state.wan_job = job
-        st.session_state.wan_video = None
-
-        st.success("✅ الطلب اتبعت بنجاح!")
-        st.info("⏳ استنى شوية، وبعدها اضغط «🔄 فحص حالة الفيديو».")
-    except Exception as e:
-        st.error("❌ حصل خطأ أثناء إرسال الطلب.")
-        st.code(str(e))
-
-if st.session_state.wan_client is not None:
-    st.divider()
-
-    if st.button("🔄 فحص حالة الفيديو", use_container_width=True):
-        try:
-            with st.spinner("🔎 جاري فحص حالة الفيديو..."):
-                result = st.session_state.wan_client.predict(
-                    api_name="/status_refresh"
-                )
-
-            video = extract_video(result)
-
-            if video:
-                video = download_remote(video)
-                st.session_state.wan_video = video
-                st.success("🎉 الفيديو خلص!")
-            else:
-                st.info("⏳ لسه بيتعمل. اضغط فحص الحالة مرة تانية بعد شوية.")
-
-        except Exception as e:
-            st.warning("⚠️ لسه بيتعمل أو الـ Space عليه ضغط.")
-            st.code(str(e))
-
-if st.session_state.wan_video:
-    video = st.session_state.wan_video
-
-    if voice_text.strip():
-        try:
-            with st.spinner("🎙️ جاري إضافة التعليق الصوتي..."):
+            if voice_text.strip():
                 video = add_voice(video, voice_text.strip())
-        except Exception as e:
-            st.warning("الفيديو جاهز، لكن إضافة الصوت فشلت.")
-            st.code(str(e))
 
-    st.video(video)
+        st.success("🎉 تم إنشاء الفيديو بنجاح!")
+        st.video(video)
 
-    try:
         with open(video, "rb") as f:
             st.download_button(
                 "⬇️ تحميل الفيديو",
@@ -196,5 +173,10 @@ if st.session_state.wan_video:
                 mime="video/mp4",
                 use_container_width=True,
             )
-    except Exception:
-        pass
+
+    except Exception as e:
+        st.error("❌ حصل خطأ أثناء توليد الفيديو.")
+        st.code(str(e))
+        st.info(
+            "لو ظهر أن الـ Space مشغول، انتظر قليلًا ثم جرّب الطلب مرة أخرى."
+        )
